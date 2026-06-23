@@ -1,5 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/*.py": {
+      "runtime": "@vercel/python@4.3.0",
+      "includeFiles": "*.py"
+    }
+  },
   "rewrites": [
     { "source": "/api/auth/login",          "destination": "/api/auth-login" },
     { "source": "/api/auth/me",             "destination": "/api/auth-me" },
