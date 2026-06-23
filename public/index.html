@@ -1727,8 +1727,13 @@ have priced hundreds of IG new issues and know peer-set construction cold.
 
 <task>
 Review the auto-suggested peer set below for a new corporate bond issue from
-the given issuer. For EACH peer, decide whether it should be kept, dropped,
-or marked optional. Then give a short overall recommendation.
+the given issuer. Do two things:
+  1. For EACH peer in the suggested list, decide keep / drop / optional.
+  2. Recommend ADDITIONAL US-listed issuers NOT in the suggested list that
+     would strengthen the peer set (better rating alignment, deeper curve,
+     same funding cohort, etc.). These are tickers the desk should consider
+     adding. Limit to at most 5 additions.
+Then give a short overall recommendation.
 </task>
 
 <context>
@@ -1760,6 +1765,11 @@ Return strictly valid JSON, no prose outside the JSON:
     {"ticker": "XXX", "decision": "keep|drop|optional", "reason": "<= 12 words"}
     ...one entry per peer above...
   ],
+  "add_recommended": [
+    {"ticker": "YYY", "name": "Full Company Name", "rating": "AA+",
+     "reason": "<= 12 words why this strengthens the peer set"}
+    ...0 to 5 additions; US-listed only; tickers NOT already in suggested list...
+  ],
   "summary": "<= 2 sentences. Overall fit of the suggested set + one specific concern if any.",
   "max_recommended": <integer 4-8>
 }
@@ -1769,6 +1779,9 @@ Return strictly valid JSON, no prose outside the JSON:
 - max_recommended ≤ 8 (NSS fit degrades with too many peers).
 - Be specific. "Same sector" is not a reason — say WHY (e.g. "BBB managed-care, same regulatory exposure").
 - If you have no concerns, say so explicitly. Don't invent issues.
+- For add_recommended: only US-listed equity tickers (e.g. MSFT, GOOGL — not foreign listings).
+  Each addition needs name and rating you are confident about; if unsure, omit the row.
+- add_recommended can be an empty array [] if the suggested set is already good.
 </constraints>`;
 }
 
@@ -1801,9 +1814,10 @@ async function fetchAiPeerSuggestion(issuer, peers) {
 }
 
 function renderAiPeerSuggestion(json) {
-  // Renders the {peers, summary} JSON returned by Tigress AI into the
-  // suggestion box, with decision chips per
-  // peer and an inline action to auto-tick/untick based on the AI verdict.
+  // Renders the {peers, add_recommended, summary} JSON returned by Tigress
+  // AI into the suggestion box. DROP rows for existing peers Claude wants
+  // removed + ADD rows for new tickers Claude wants injected (not already
+  // in Bloomberg's auto-suggestion). One-click Apply does both.
   const bodyEl = document.getElementById('ai-suggestion-body');
   bodyEl.classList.remove('placeholder');
   if (!json || !json.peers) {
@@ -1818,7 +1832,26 @@ function renderAiPeerSuggestion(json) {
       <span style="color:#666;font-size:12px;">${p.reason}</span>
     </div>
   `).join('');
-  bodyEl.innerHTML = `<div style="margin-bottom:10px;color:#1a1f36;">${json.summary || ''}</div>${chips}` +
+
+  // ADD recommendations — tickers NOT in the suggested set that Claude
+  // thinks would strengthen the peer comparable cohort. Rendered with a
+  // green ADD chip + the issuer name/rating Claude provided.
+  const adds = Array.isArray(json.add_recommended) ? json.add_recommended : [];
+  const addChips = adds.length === 0 ? '' :
+    `<div style="margin-top:14px;padding-top:10px;border-top:1px solid #e5e7eb;">` +
+    `<div style="font-size:11px;color:#666;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Suggested additions (not in Bloomberg list)</div>` +
+    adds.map(a => `
+      <div style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+        <span class="peer-ticker" style="min-width:48px;">${a.ticker}</span>
+        <span style="color:#166534;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;min-width:60px;">ADD</span>
+        <span style="color:#1a1f36;font-size:12px;min-width:120px;">${a.name || ''}</span>
+        <span class="peer-rating" style="font-size:11px;">${a.rating || 'NR'}</span>
+        <span style="color:#666;font-size:12px;margin-left:6px;">${a.reason || ''}</span>
+      </div>
+    `).join('') +
+    `</div>`;
+
+  bodyEl.innerHTML = `<div style="margin-bottom:10px;color:#1a1f36;">${json.summary || ''}</div>${chips}${addChips}` +
     `<div style="margin-top:10px;font-size:11px;color:#888;">Recommended max peers: ${json.max_recommended || '?'}</div>` +
     `<button onclick="applyAiPeerDecisions(window.__lastAiSuggestion)" style="margin-top:10px;padding:6px 12px;background:#e8752a;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">Apply AI Recommendations</button>`;
   window.__lastAiSuggestion = json;
@@ -1931,6 +1964,7 @@ async function fetchAiPitchCommentary(issuerInfo, pricing, scenario, peerCount, 
 
 function applyAiPeerDecisions(json) {
   if (!json || !json.peers) return;
+  // 1. Apply keep/drop decisions on existing rows
   for (const p of json.peers) {
     const cb = document.querySelector(`#peer-select-list input[value="${p.ticker}"]`);
     if (!cb) continue;
@@ -1938,6 +1972,34 @@ function applyAiPeerDecisions(json) {
     cb.checked = shouldKeep;
     togglePeerSelection(p.ticker, shouldKeep);
   }
+  // 2. Inject AI-recommended additions as new checked rows. Skip tickers
+  //    already present (e.g. if AI suggests one Bloomberg also returned).
+  const adds = Array.isArray(json.add_recommended) ? json.add_recommended : [];
+  const existing = new Set(SUGGESTED_PEERS.map(p => p.ticker.toUpperCase()));
+  const list = document.getElementById('peer-select-list');
+  for (const a of adds) {
+    const tk = (a.ticker || '').toUpperCase().trim();
+    if (!tk || existing.has(tk)) continue;
+    const newPeer = {
+      ticker: tk,
+      name:   a.name   || tk,
+      rating: a.rating || 'NR',
+      sector: a.sector || '(AI suggested)',
+    };
+    SUGGESTED_PEERS.push(newPeer);
+    SELECTED_PEERS.add(tk);
+    existing.add(tk);
+    // Append a checkbox row mirroring the existing template
+    const label = document.createElement('label');
+    label.innerHTML =
+      `<input type="checkbox" value="${tk}" checked ` +
+      `onchange="togglePeerSelection('${tk}', this.checked)">` +
+      `<span class="peer-ticker">${tk}</span>` +
+      `<span class="peer-name">${newPeer.name}</span>` +
+      `<span class="peer-rating">${newPeer.rating}</span>`;
+    list.appendChild(label);
+  }
+  syncRunButton();
 }
 
 
