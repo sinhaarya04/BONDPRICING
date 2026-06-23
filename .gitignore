@@ -1,0 +1,11 @@
+.env
+.env.*
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+server.log
+.vercel/
+# Local-only launcher with embedded OpenFIGI key — keep out of public repos
+launch.bat
+
+.vercel

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/*.py": {
+      "includeFiles": "*.py"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/auth/login",          "destination": "/api/auth-login" },
+    { "source": "/api/auth/me",             "destination": "/api/auth-me" },
+    { "source": "/api/auth/logout",         "destination": "/api/auth-logout" },
+    { "source": "/api/peers/:ticker",       "destination": "/api/peers?t=:ticker" },
+    { "source": "/api/load/:ticker",        "destination": "/api/load?t=:ticker" },
+    { "source": "/api/ai/chat",             "destination": "/api/ai-chat" },
+    { "source": "/api/ai/peer-suggestion",  "destination": "/api/ai-peer-suggestion" },
+    { "source": "/api/ai/pitch-commentary", "destination": "/api/ai-pitch-commentary" }
+  ]
+}

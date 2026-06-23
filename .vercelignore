@@ -1,0 +1,18 @@
+# Local-only files — not needed in the Vercel client viewer
+server.py
+bondcli.py
+probe_peers.py
+pricing.py
+bondpricing.ipynb
+launch.bat
+server.log
+
+# Future boss-machine launcher artifacts (Stage 3)
+TigressBondPricing.vbs
+TigressBondPricing.bat
+setup-boss-machine.bat
+
+# Local env + caches
+.env
+__pycache__/
+.vercel/
