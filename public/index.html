@@ -1835,21 +1835,29 @@ function renderAiPeerSuggestion(json) {
 
   // ADD recommendations — tickers NOT in the suggested set that Claude
   // thinks would strengthen the peer comparable cohort. Rendered with a
-  // green ADD chip + the issuer name/rating Claude provided.
+  // green ADD chip + the issuer name/rating Claude provided. Always shown
+  // (even when empty) so the user can tell whether Claude returned the
+  // field or the schema didn't reach Claude.
   const adds = Array.isArray(json.add_recommended) ? json.add_recommended : [];
-  const addChips = adds.length === 0 ? '' :
+  const addRows = adds.length === 0
+    ? `<div style="color:#888;font-size:12px;font-style:italic;padding:4px 0;">(none suggested — current Bloomberg set is adequate)</div>`
+    : adds.map(a => `
+        <div style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+          <span class="peer-ticker" style="min-width:48px;">${a.ticker}</span>
+          <span style="color:#166534;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;min-width:60px;">ADD</span>
+          <span style="color:#1a1f36;font-size:12px;min-width:120px;">${a.name || ''}</span>
+          <span class="peer-rating" style="font-size:11px;">${a.rating || 'NR'}</span>
+          <span style="color:#666;font-size:12px;margin-left:6px;">${a.reason || ''}</span>
+        </div>
+      `).join('');
+  const addChips =
     `<div style="margin-top:14px;padding-top:10px;border-top:1px solid #e5e7eb;">` +
     `<div style="font-size:11px;color:#666;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Suggested additions (not in Bloomberg list)</div>` +
-    adds.map(a => `
-      <div style="display:flex;align-items:center;gap:8px;padding:4px 0;">
-        <span class="peer-ticker" style="min-width:48px;">${a.ticker}</span>
-        <span style="color:#166534;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;min-width:60px;">ADD</span>
-        <span style="color:#1a1f36;font-size:12px;min-width:120px;">${a.name || ''}</span>
-        <span class="peer-rating" style="font-size:11px;">${a.rating || 'NR'}</span>
-        <span style="color:#666;font-size:12px;margin-left:6px;">${a.reason || ''}</span>
-      </div>
-    `).join('') +
+    addRows +
     `</div>`;
+  // Debug aid: log raw response so we can tell whether the new schema
+  // round-tripped through Claude. Open DevTools Console (F12) to see.
+  console.log('[AI peer-suggestion] raw response:', json);
 
   bodyEl.innerHTML = `<div style="margin-bottom:10px;color:#1a1f36;">${json.summary || ''}</div>${chips}${addChips}` +
     `<div style="margin-top:10px;font-size:11px;color:#888;">Recommended max peers: ${json.max_recommended || '?'}</div>` +

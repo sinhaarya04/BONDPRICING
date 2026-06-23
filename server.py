@@ -1351,7 +1351,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
 
         ai_routes = {
-            "/api/ai/peer-suggestion":  1024,
+            "/api/ai/peer-suggestion":  2048,
             "/api/ai/pitch-commentary": 2048,
             "/api/ai/chat":             1024,
         }
