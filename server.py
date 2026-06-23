@@ -1151,13 +1151,22 @@ def _get_auth(handler):
 
 # ── HTTP Handler ───────────────────────────────────────────────────
 
+# Static assets (index.html, logo.png) live in public/ so the same files
+# also serve from Vercel under its Python-framework static convention.
+_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "public")
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        kwargs["directory"] = _STATIC_DIR
+        super().__init__(*args, **kwargs)
+
     def do_GET(self):
         global _session  # may be reset to None on Bloomberg connection error
-        # Logo from project directory (BONDPRICING/logo.png)
+        # Logo from public/logo.png
         if self.path == "/logo.png":
-            here = os.path.dirname(os.path.abspath(__file__))
-            logo_path = os.path.join(here, "logo.png")
+            logo_path = os.path.join(_STATIC_DIR, "logo.png")
             if os.path.isfile(logo_path):
                 self.send_response(200)
                 self.send_header("Content-Type", "image/png")
