@@ -27,14 +27,16 @@ REM working path. If nothing is found, write an error to server.log
 REM and exit.
 set "PY_EXE="
 
-where py >NUL 2>&1
-if not errorlevel 1 (
-    set "PY_EXE=py -3"
+REM Try explicit install paths FIRST -- the 'py' launcher on PATH can
+REM be intercepted by the Microsoft Store stub which doesn't actually
+REM run Python.
+if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" (
+    set "PY_EXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
     goto :found_py
 )
 
-if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" (
-    set "PY_EXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+if exist "%ProgramFiles%\Python312\python.exe" (
+    set "PY_EXE=%ProgramFiles%\Python312\python.exe"
     goto :found_py
 )
 
@@ -45,6 +47,13 @@ if exist "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" (
 
 if exist "C:\Python312\python.exe" (
     set "PY_EXE=C:\Python312\python.exe"
+    goto :found_py
+)
+
+REM Last resort: py launcher (may hit Store stub on some machines)
+where py >NUL 2>&1
+if not errorlevel 1 (
+    set "PY_EXE=py -3"
     goto :found_py
 )
 
