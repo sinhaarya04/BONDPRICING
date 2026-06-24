@@ -636,11 +636,13 @@
     <div class="peer-section-title">Suggested Peer Companies <span id="peer-select-source" style="font-weight:400;color:#aaa;text-transform:none;letter-spacing:0;"></span></div>
     <div class="peer-list" id="peer-select-list"></div>
 
-    <div class="peer-section-title">AI Suggestions</div>
-    <div class="ai-suggestion-box">
-      <div class="ai-title">Tigress AI analysis</div>
-      <div class="ai-suggestion-body placeholder" id="ai-suggestion-body">
-        Tigress AI peer-set review will appear here after you confirm the peer list.
+    <div id="ai-suggestions-wrapper">
+      <div class="peer-section-title">AI Suggestions</div>
+      <div class="ai-suggestion-box">
+        <div class="ai-title">Tigress AI analysis</div>
+        <div class="ai-suggestion-body placeholder" id="ai-suggestion-body">
+          Tigress AI peer-set review will appear here after you confirm the peer list.
+        </div>
       </div>
     </div>
 
@@ -1519,8 +1521,16 @@ async function loadIssuer() {
     document.getElementById('peer-select-screen').classList.remove('hidden');
     renderPeerSelection(data);
 
-    // Fire (placeholder) AI suggestion — see TODO block below
-    fetchAiPeerSuggestion(data.issuer, SUGGESTED_PEERS);
+    // AI peer-set review is an employee-only affordance. Hide the panel
+    // and skip the Claude call entirely for clients (saves API credits +
+    // keeps the client view focused on the curated peer set, not internal
+    // analysis chatter).
+    const aiWrapper = document.getElementById('ai-suggestions-wrapper');
+    const isClient = CURRENT_USER && CURRENT_USER.role === 'client';
+    if (aiWrapper) aiWrapper.style.display = isClient ? 'none' : '';
+    if (!isClient) {
+      fetchAiPeerSuggestion(data.issuer, SUGGESTED_PEERS);
+    }
 
     statusEl.style.display = 'none';
   } catch (e) {
