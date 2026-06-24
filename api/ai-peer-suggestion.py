@@ -7,7 +7,7 @@ import json
 import cache_store
 import claude_client
 
-MAX_TOKENS = 2048
+MAX_TOKENS = 4096
 
 
 class handler(BaseHTTPRequestHandler):

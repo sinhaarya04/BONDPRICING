@@ -274,49 +274,48 @@ def auth_from_headers(headers):
 def client_peers_view(doc):
     """Build the peer-select payload a client should see for this ticker.
 
-    Clients should NEVER see the raw Bloomberg auto-suggestion — they
-    should see the curated set the employee actually priced against
-    (which includes AI-added names like MSFT/GOOGL on top of, or replacing,
-    the Bloomberg defaults).
+    Clients should ONLY see tickers the desk has actually priced — i.e.
+    where the employee clicked Run and a curated peer set + bond data
+    landed in load_response.peerTickers + load_response.peerIssuers.
 
-    Strategy:
-      1. If load_response is cached AND has peerTickers + peerIssuers,
-         synthesize a peers list from those. This is the curated set.
-      2. Otherwise, fall back to the raw peers_response (Bloomberg's
-         auto-suggestion) — better than nothing for cold cache.
-      3. Return None if neither is cached.
+    Returns None if no load_response is cached yet (peers_response alone
+    is intermediate state — the employee started browsing but never
+    finished the analysis; that's not a published view). The caller
+    surfaces 404 "not_cached" so the client sees the friendly "Not yet
+    available — ask your Tigress contact" message rather than 29 raw
+    Bloomberg auto-suggested peers for a ticker like JPM.
 
     Returned shape mirrors the existing peers_response contract:
       {issuer, source, peers:[{ticker,name,rating,sector}], dropped:[]}
     """
     if doc is None:
         return None
-    peers_resp = doc.get("peers_response")
     load_resp  = doc.get("load_response")
+    if not load_resp:
+        return None
 
-    if load_resp:
-        peer_tickers = load_resp.get("peerTickers") or []
-        peer_issuers = load_resp.get("peerIssuers") or {}
-        if peer_tickers and peer_issuers:
-            curated = []
-            for tk in peer_tickers:
-                info = peer_issuers.get(tk) or {}
-                curated.append({
-                    "ticker": tk,
-                    "name":   info.get("name") or tk,
-                    "rating": info.get("rating") or "NR",
-                    "sector": info.get("sector") or "",
-                })
-            issuer = (load_resp.get("issuer")
-                      or (peers_resp.get("issuer") if peers_resp else {}))
-            return {
-                "issuer":  issuer,
-                "source":  "curated",
-                "peers":   curated,
-                "dropped": [],
-            }
+    peer_tickers = load_resp.get("peerTickers") or []
+    peer_issuers = load_resp.get("peerIssuers") or {}
+    if not peer_tickers or not peer_issuers:
+        return None
 
-    return peers_resp
+    curated = []
+    for tk in peer_tickers:
+        info = peer_issuers.get(tk) or {}
+        curated.append({
+            "ticker": tk,
+            "name":   info.get("name") or tk,
+            "rating": info.get("rating") or "NR",
+            "sector": info.get("sector") or "",
+        })
+    peers_resp = doc.get("peers_response") or {}
+    issuer = load_resp.get("issuer") or peers_resp.get("issuer") or {}
+    return {
+        "issuer":  issuer,
+        "source":  "curated",
+        "peers":   curated,
+        "dropped": [],
+    }
 
 
 # In-process fallback so the local server still works for the boss who
