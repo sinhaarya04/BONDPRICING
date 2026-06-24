@@ -588,6 +588,33 @@
       font-size: 12px; color: #5a6478; font-style: italic;
       margin-bottom: 12px;
     }
+    /* Add-another-peer row (employee only) */
+    .add-peer-row {
+      display: flex; align-items: center; gap: 8px;
+      margin-top: 10px; padding: 10px 0;
+    }
+    .add-peer-label {
+      font-size: 12px; font-weight: 600; color: #1F2C5C;
+    }
+    .add-peer-row input[type="text"] {
+      width: 110px; padding: 6px 9px;
+      border: 1px solid #c8cfd9; border-radius: 4px;
+      font-size: 13px; text-transform: uppercase;
+      font-family: inherit;
+    }
+    .add-peer-row input[type="text"]:focus {
+      outline: none; border-color: #E97725;
+      box-shadow: 0 0 0 2px rgba(233, 119, 37, 0.15);
+    }
+    .add-peer-btn {
+      padding: 6px 12px; background: #E97725; color: #fff;
+      border: none; border-radius: 4px; font-size: 12px; font-weight: 700;
+      cursor: pointer;
+    }
+    .add-peer-btn:hover { background: #d96612; }
+    .add-peer-hint {
+      font-size: 11px; color: #c0392b; font-weight: 500;
+    }
 </style>
 </head>
 <body>
@@ -665,6 +692,16 @@
 
     <div class="peer-section-title">Suggested Peer Companies <span id="peer-select-source" style="font-weight:400;color:#aaa;text-transform:none;letter-spacing:0;"></span></div>
     <div class="peer-list" id="peer-select-list"></div>
+
+    <!-- Employee-only: manually add a peer ticker not in the Bloomberg list -->
+    <div class="add-peer-row" id="add-peer-row" style="display:none;">
+      <span class="add-peer-label">Add another peer:</span>
+      <input type="text" id="add-peer-input" placeholder="e.g. NVDA"
+             maxlength="6" autocomplete="off"
+             onkeydown="if(event.key==='Enter') addPeerTicker()" />
+      <button class="add-peer-btn" onclick="addPeerTicker()">+ Add Peer</button>
+      <span class="add-peer-hint" id="add-peer-hint"></span>
+    </div>
 
     <div id="ai-suggestions-wrapper">
       <div class="peer-section-title">AI Suggestions</div>
@@ -1633,6 +1670,9 @@ function renderPeerSelection(data) {
   const list = document.getElementById('peer-select-list');
   const isClient = CURRENT_USER && CURRENT_USER.role === 'client';
   list.classList.toggle('readonly', isClient);
+  // Show "+ Add Peer" row only for employees
+  const addRow = document.getElementById('add-peer-row');
+  if (addRow) addRow.style.display = isClient ? 'none' : '';
   // Remove any pre-existing hint, then add for client role
   const oldHint = document.getElementById('peer-readonly-hint');
   if (oldHint) oldHint.remove();
@@ -2064,6 +2104,48 @@ async function fetchAiPitchCommentary(issuerInfo, pricing, scenario, peerCount, 
   } catch (e) {
     return { ok: false, error: e.message };
   }
+}
+
+function addPeerTicker() {
+  // Employee-only: append a manually-entered ticker to the peer list.
+  // The new row is checked by default. Name + rating are placeholders
+  // until /api/load runs (which fetches issuer info via Bloomberg for
+  // every ticker in the curated set, including manually added ones).
+  const input = document.getElementById('add-peer-input');
+  const hint  = document.getElementById('add-peer-hint');
+  hint.textContent = '';
+  let tk = (input.value || '').trim().toUpperCase().replace(/[^A-Z.]/g, '');
+  if (!tk) { input.focus(); return; }
+  if (tk.length > 6) { hint.textContent = 'Ticker too long.'; return; }
+  if (tk === currentIssuer) {
+    hint.textContent = "Can't add the issuer to its own peer set.";
+    return;
+  }
+  const existing = new Set(SUGGESTED_PEERS.map(p => p.ticker.toUpperCase()));
+  if (existing.has(tk)) {
+    hint.textContent = tk + ' is already in the list.';
+    input.value = '';
+    return;
+  }
+  const newPeer = {
+    ticker: tk,
+    name:   '(loading...)',
+    rating: '\u2014',
+    sector: '(manual add)',
+  };
+  SUGGESTED_PEERS.push(newPeer);
+  SELECTED_PEERS.add(tk);
+  const list = document.getElementById('peer-select-list');
+  const label = document.createElement('label');
+  label.innerHTML =
+    `<input type="checkbox" value="${tk}" checked ` +
+    `onchange="togglePeerSelection('${tk}', this.checked)">` +
+    `<span class="peer-ticker">${tk}</span>` +
+    `<span class="peer-name">${newPeer.name}</span>` +
+    `<span class="peer-rating">${newPeer.rating}</span>`;
+  list.appendChild(label);
+  input.value = '';
+  syncRunButton();
 }
 
 function applyAiPeerDecisions(json) {
