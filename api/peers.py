@@ -26,9 +26,13 @@ class handler(BaseHTTPRequestHandler):
         if not ticker or len(ticker) > 6:
             return self._json(400, {"error": "Invalid ticker."})
 
+        # Return the CURATED peer set (what the employee actually ran with,
+        # including AI-added names) — not Bloomberg's raw auto-suggestion.
+        # Falls back to peers_response when load_response not yet cached.
         doc = cache_store.read_cache(ticker)
-        if doc and doc.get("peers_response"):
-            return self._json(200, doc["peers_response"])
+        view = cache_store.client_peers_view(doc)
+        if view:
+            return self._json(200, view)
         return self._json(404, {
             "error":   "not_cached",
             "message": "Not yet available \u2014 ask your Tigress contact "

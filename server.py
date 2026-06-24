@@ -1202,11 +1202,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not ticker or len(ticker) > 6:
                 self._json(400, {"error": "Invalid ticker."})
                 return
-            # Client role: read-only, cache-only
+            # Client role: read-only, cache-only. Show the CURATED peer
+            # set (the one the employee actually ran with — MSFT/GOOGL/etc
+            # for AAPL — not Bloomberg's raw auto-suggestion of HPQ/DELL/
+            # WDC). Falls back to peers_response if no load yet.
             if role == "client":
                 doc = cache_store.read_cache(ticker)
-                if doc and doc.get("peers_response"):
-                    self._json(200, doc["peers_response"])
+                view = cache_store.client_peers_view(doc)
+                if view:
+                    self._json(200, view)
                 else:
                     self._json(404, {
                         "error":   "not_cached",
