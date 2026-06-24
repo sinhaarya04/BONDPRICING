@@ -406,6 +406,36 @@
     .chat-send:disabled { background: #a0c0f0; cursor: not-allowed; }
     .chat-spinner { color: #888; font-style: italic; font-size: 10px; }
 
+    /* Send Request panel (clients only — emails the desk) */
+    .request-panel {
+      background: #fff; border: 1px solid #e1e5ea; border-radius: 6px;
+      padding: 12px; margin-top: 12px;
+    }
+    .request-panel h3 {
+      font-size: 13px; font-weight: 700; color: #1F2C5C;
+      margin: 0 0 8px 0; display: flex; align-items: center; gap: 6px;
+    }
+    .request-panel .desk-badge {
+      font-size: 9px; font-weight: 700; background: #E97725; color: #fff;
+      padding: 2px 6px; border-radius: 3px; letter-spacing: 0.5px;
+    }
+    .request-panel p { font-size: 11px; color: #666; margin: 0 0 8px 0; }
+    .request-panel textarea {
+      width: 100%; box-sizing: border-box; padding: 6px 8px;
+      border: 1px solid #d8dde5; border-radius: 4px; font-size: 12px;
+      font-family: inherit; resize: vertical; min-height: 60px;
+    }
+    .request-panel textarea:focus { outline: none; border-color: #E97725; }
+    .request-send {
+      margin-top: 6px; width: 100%; padding: 8px 12px;
+      background: #E97725; color: #fff; border: none; border-radius: 4px;
+      font-size: 12px; font-weight: 700; cursor: pointer;
+    }
+    .request-send:hover { background: #d96612; }
+    .request-recipients {
+      font-size: 10px; color: #888; margin-top: 6px; line-height: 1.4;
+    }
+
     .app.hidden, .landing.hidden, .peer-select.hidden { display: none; }
 
     /* ── Peer Selection Screen ── */
@@ -741,6 +771,17 @@
       </div>
     </div>
 
+    <!-- Send Request panel (CLIENTS ONLY — emails the Tigress desk) -->
+    <div class="request-panel" id="send-request-panel" style="display:none;">
+      <h3>Send Request <span class="desk-badge">DESK</span></h3>
+      <p>For a new ticker pull, custom analysis, or anything else.</p>
+      <textarea id="request-message" placeholder="What do you need? e.g. &quot;Please pull current pricing for V (Visa).&quot;"></textarea>
+      <button class="request-send" onclick="sendDeskRequest()">Email Tigress Desk</button>
+      <div class="request-recipients">
+        To: Michael Lindley, Carla Willmes, Nina Caldarone
+      </div>
+    </div>
+
     <div class="info-note" style="margin-top:auto;">
       <strong>Methodology:</strong> Nelson-Siegel spread curve fit to <span id="method-peer-count">--</span> <span id="method-sector">--</span> peer bonds (&#955;=1.37), plus credit, issuer, and NIC adjustments per tenor. IPT = Final + 12 bps; Guidance = Final + 5 bps. Data sourced live from Bloomberg.
     </div>
@@ -966,6 +1007,41 @@ function showLandingForUser() {
   if (hint) hint.textContent = isClient
     ? 'Download the underlying data as an Excel workbook.'
     : 'Export data or generate a presentation-ready pitch deck.';
+  // Client-only: Send Request panel (emails the Tigress desk via mailto:)
+  const reqPanel = document.getElementById('send-request-panel');
+  if (reqPanel) reqPanel.style.display = isClient ? '' : 'none';
+}
+
+/* ── Client → Desk: send request via mailto: ──
+   Opens the user's default mail client (Outlook on Windows, Mail on
+   macOS, Gmail compose in browser) with the 3 desk recipients
+   pre-filled. The body includes the client's email + which ticker
+   they're currently viewing for context. We use mailto: instead of a
+   backend SMTP route so there are no extra creds to provision and the
+   email goes from the client's own account (preserving identity). */
+function sendDeskRequest() {
+  const msgEl = document.getElementById('request-message');
+  const msg = (msgEl.value || '').trim();
+  if (!msg) {
+    msgEl.focus();
+    msgEl.placeholder = 'Please type your request first.';
+    return;
+  }
+  const to = [
+    'mlindley@tigressfp.com',
+    'cwillmes@tigressfp.com',
+    'ncaldarone@tigressfp.com',
+  ].join(',');
+  const ticker = currentIssuer || '';
+  const subject = 'Bond Pricing Request' + (ticker ? ' — ' + ticker : '');
+  const fromLine = CURRENT_USER ? ('From: ' + CURRENT_USER.email + '\n') : '';
+  const ctxLine  = ticker ? ('Currently viewing: ' + ticker + '\n') : '';
+  const body = fromLine + ctxLine + '\nRequest:\n' + msg + '\n';
+  window.location.href = 'mailto:' + to +
+    '?subject=' + encodeURIComponent(subject) +
+    '&body='    + encodeURIComponent(body);
+  // Optimistic UI: clear the field after firing mailto.
+  msgEl.value = '';
 }
 
 async function doLogin(ev) {
