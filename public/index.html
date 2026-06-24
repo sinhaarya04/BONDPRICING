@@ -815,7 +815,7 @@
       <textarea id="request-message" placeholder="What do you need? e.g. &quot;Please pull current pricing for V (Visa).&quot;"></textarea>
       <button class="request-send" onclick="sendDeskRequest()">Email Tigress Desk</button>
       <div class="request-recipients">
-        To: Michael Lindley, Carla Willmes, Nina Caldarone
+        To: Michael Lindley, Nina Caldarone
       </div>
     </div>
 
@@ -1066,7 +1066,6 @@ function sendDeskRequest() {
   }
   const to = [
     'mlindley@tigressfp.com',
-    'cwillmes@tigressfp.com',
     'ncaldarone@tigressfp.com',
   ].join(',');
   const ticker = currentIssuer || '';
