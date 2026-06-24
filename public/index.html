@@ -896,7 +896,7 @@
     <!-- Actions -->
     <div class="actions-row">
       <button class="btn btn-blue" onclick="downloadXLSX()">Download XLSX</button>
-      <button class="btn btn-orange" onclick="generatePPTX()">Generate Pitch Deck</button>
+      <button class="btn btn-orange" id="generate-pptx-btn" onclick="generatePPTX()">Generate Pitch Deck</button>
       <span style="font-size:12px;color:#888;" id="download-hint">Export data or generate a presentation-ready pitch deck</span>
     </div>
 
@@ -954,6 +954,16 @@ function showLandingForUser() {
     CURRENT_USER.role === 'employee' ? 'Employee' : 'Client';
   document.getElementById('user-badge-email').textContent = CURRENT_USER.email;
   badge.style.display = '';
+
+  // Employee-only affordances: hide pitch-deck generation from clients.
+  // (Clients still get XLSX export.)
+  const isClient = CURRENT_USER.role === 'client';
+  const pptxBtn = document.getElementById('generate-pptx-btn');
+  if (pptxBtn) pptxBtn.style.display = isClient ? 'none' : '';
+  const hint = document.getElementById('download-hint');
+  if (hint) hint.textContent = isClient
+    ? 'Download the underlying data as an Excel workbook.'
+    : 'Export data or generate a presentation-ready pitch deck.';
 }
 
 async function doLogin(ev) {
