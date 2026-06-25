@@ -609,7 +609,7 @@ def fetch_issuer_info(ticker):
     }
 
 
-def fetch_bonds_for_tickers(peer_tickers):
+def fetch_bonds_for_tickers(peer_tickers, max_bonds_per_issuer=15):
     """Resolve a list of issuer tickers into a deduplicated list of USD
     bond rows ready for pricing / display.
 
@@ -617,6 +617,14 @@ def fetch_bonds_for_tickers(peer_tickers):
     user edit the bond list before pricing. Each call: per-issuer
     OpenFIGI lookup + a single batched Bloomberg ReferenceDataRequest
     over all that issuer's FIGIs.
+
+    Args:
+      peer_tickers:           List of issuer tickers to enumerate bonds for.
+      max_bonds_per_issuer:   Per-issuer cap. Default 15 is right for peer
+                              enumeration (curve fit doesn't need more); for
+                              the issuer's OWN bonds we pass a much higher
+                              value (75) via fetch_issuer_bonds so we surface
+                              the full debt stack instead of a slice.
 
     Returns list of bond dicts:
       {issuer, ticker, cusip, rating, ytm, spread, issue_dt, maturity_dt,
@@ -629,7 +637,7 @@ def fetch_bonds_for_tickers(peer_tickers):
     seen = set()
     for ptk in peer_tickers[:8]:  # cap at 8 issuers per call
         try:
-            bond_secs = find_issuer_bonds_via_openfigi(ptk, max_bonds=15)
+            bond_secs = find_issuer_bonds_via_openfigi(ptk, max_bonds=max_bonds_per_issuer)
             if not bond_secs:
                 continue
             bond_data = ref_data(bond_secs, [
@@ -973,9 +981,14 @@ def _attach_zscores(rows, ref_stats=None):
 
 def fetch_issuer_bonds(ticker):
     """Pull the issuer's own outstanding USD bonds. Same shape as
-    fetch_bonds_for_tickers, just for a single issuer.
+    fetch_bonds_for_tickers, just for a single issuer. Uses a much
+    larger per-issuer cap (75) than the peer-enumeration default (15)
+    because the issuer's-own-bonds table is the user-visible "full debt
+    stack" — we want all of AAPL's ~50 outstanding USD bonds, not the
+    first 15. 75 is below OpenFIGI's single-page limit (~100) so no
+    pagination needed.
     """
-    return fetch_bonds_for_tickers([ticker])
+    return fetch_bonds_for_tickers([ticker], max_bonds_per_issuer=75)
 
 
 def _build_empirical_scorecard(peer_rows, peer_tickers, issuer_info):
