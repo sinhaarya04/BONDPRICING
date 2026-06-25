@@ -222,6 +222,19 @@
     .peer-rating-mid  { background: #fff3cd; color: #856404; }
     .peer-rating-low  { background: #f8d7da; color: #721c24; }
 
+    /* Sortable column headers (peer + issuer bond tables) */
+    th.sortable {
+      cursor: pointer; user-select: none;
+      transition: background 0.12s;
+    }
+    th.sortable:hover { background: rgba(233, 119, 37, 0.08); }
+    th.sortable .sort-ind {
+      display: inline-block; margin-left: 3px;
+      font-size: 9px; color: #E97725; opacity: 0.25;
+      transition: opacity 0.12s;
+    }
+    th.sortable.sort-active .sort-ind { opacity: 1; }
+
     /* ── Landing Screen ── */
     .landing {
       display: flex; align-items: center; justify-content: center;
@@ -923,18 +936,18 @@
       <table>
         <thead>
           <tr>
-            <th style="text-align:left;">Issuer</th>
-            <th>Ticker</th>
-            <th>CUSIP</th>
-            <th>Rating</th>
-            <th>Issued</th>
-            <th>Matures</th>
-            <th>Orig</th>
-            <th>Mat (Yrs)</th>
-            <th>Coupon</th>
-            <th>Spread (bps)</th>
-            <th>CDS Basis</th>
-            <th>Z</th>
+            <th class="sortable" style="text-align:left;" data-table="issuer" data-key="issuer"      onclick="setSortAndRender('issuer','issuer')">Issuer<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="issuer" data-key="ticker"      onclick="setSortAndRender('issuer','ticker')">Ticker<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="issuer" data-key="cusip"       onclick="setSortAndRender('issuer','cusip')">CUSIP<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="issuer" data-key="rating"      onclick="setSortAndRender('issuer','rating')">Rating<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="issuer" data-key="issue_dt"    onclick="setSortAndRender('issuer','issue_dt')">Issued<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="issuer" data-key="maturity_dt" onclick="setSortAndRender('issuer','maturity_dt')">Matures<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="issuer" data-key="orig_tenor"  onclick="setSortAndRender('issuer','orig_tenor')">Orig<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="issuer" data-key="ytm"         onclick="setSortAndRender('issuer','ytm')">Mat (Yrs)<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="issuer" data-key="coupon"      onclick="setSortAndRender('issuer','coupon')">Coupon<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="issuer" data-key="spread"      onclick="setSortAndRender('issuer','spread')">Spread (bps)<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="issuer" data-key="cds_basis"   onclick="setSortAndRender('issuer','cds_basis')">CDS Basis<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="issuer" data-key="z_score"     onclick="setSortAndRender('issuer','z_score')">Z<span class="sort-ind">&#9650;</span></th>
           </tr>
         </thead>
         <tbody id="issuer-bonds-tbody"></tbody>
@@ -955,18 +968,18 @@
       <table>
         <thead>
           <tr>
-            <th style="text-align:left;">Issuer</th>
-            <th>Ticker</th>
-            <th>CUSIP</th>
-            <th>Rating</th>
-            <th>Issued</th>
-            <th>Matures</th>
-            <th>Orig</th>
-            <th>Mat (Yrs)</th>
-            <th>Coupon</th>
-            <th>Spread (bps)</th>
-            <th>CDS Basis</th>
-            <th>Z</th>
+            <th class="sortable" style="text-align:left;" data-table="peer" data-key="issuer"      onclick="setSortAndRender('peer','issuer')">Issuer<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="peer" data-key="ticker"      onclick="setSortAndRender('peer','ticker')">Ticker<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="peer" data-key="cusip"       onclick="setSortAndRender('peer','cusip')">CUSIP<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="peer" data-key="rating"      onclick="setSortAndRender('peer','rating')">Rating<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="peer" data-key="issue_dt"    onclick="setSortAndRender('peer','issue_dt')">Issued<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="peer" data-key="maturity_dt" onclick="setSortAndRender('peer','maturity_dt')">Matures<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="peer" data-key="orig_tenor"  onclick="setSortAndRender('peer','orig_tenor')">Orig<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="peer" data-key="ytm"         onclick="setSortAndRender('peer','ytm')">Mat (Yrs)<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="peer" data-key="coupon"      onclick="setSortAndRender('peer','coupon')">Coupon<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="peer" data-key="spread"      onclick="setSortAndRender('peer','spread')">Spread (bps)<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="peer" data-key="cds_basis"   onclick="setSortAndRender('peer','cds_basis')">CDS Basis<span class="sort-ind">&#9650;</span></th>
+            <th class="sortable" data-table="peer" data-key="z_score"     onclick="setSortAndRender('peer','z_score')">Z<span class="sort-ind">&#9650;</span></th>
           </tr>
         </thead>
         <tbody id="peer-tbody"></tbody>
@@ -2910,10 +2923,101 @@ function bondTableRowHTML(b, spreadShock) {
   </tr>`;
 }
 
+/* ── Bond-table sort state + helpers ──
+   Each of the two bond tables (peer + issuer-own) keeps its own
+   key + direction. Clicking a header toggles direction on the
+   same column or switches to ascending on a new column. */
+const SORT_STATE = {
+  peer:   { key: null, dir: 'asc' },
+  issuer: { key: null, dir: 'asc' },
+};
+
+// Credit ladder for proper rating-aware sort (AAA highest = rank 0,
+// D lowest, unknown/NR last so they fall to the end either direction).
+const RATING_LADDER = [
+  'AAA','AA+','AA','AA-','A+','A','A-',
+  'BBB+','BBB','BBB-','BB+','BB','BB-',
+  'B+','B','B-','CCC+','CCC','CCC-','CC','C','D'
+];
+function ratingRank(r) {
+  if (!r) return 999;
+  const i = RATING_LADDER.indexOf(r);
+  return i === -1 ? 998 : i;
+}
+
+function sortBondsBy(bonds, key, dir) {
+  if (!key) return bonds;
+  const dirMult = dir === 'desc' ? -1 : 1;
+  // Null/undefined accessor values get pushed to the end regardless
+  // of direction by using a sentinel and a presence check.
+  const accessors = {
+    issuer:      b => (b.issuer || '').toLowerCase(),
+    ticker:      b => (b.ticker || '').toLowerCase(),
+    cusip:       b => (b.cusip  || '').toLowerCase(),
+    rating:      b => ratingRank(b.rating),
+    issue_dt:    b => Date.parse(b.issue_dt)    || null,
+    maturity_dt: b => Date.parse(b.maturity_dt) || null,
+    orig_tenor:  b => b.orig_tenor,
+    ytm:         b => b.ytm,
+    coupon:      b => b.coupon,
+    spread:      b => b.spread,
+    cds_basis:   b => b.cds_basis,
+    z_score:     b => b.z_score,
+  };
+  const acc = accessors[key];
+  if (!acc) return bonds;
+  return bonds.slice().sort((a, b) => {
+    const va = acc(a), vb = acc(b);
+    // Push null/undefined/NaN to the end either way
+    const aMissing = (va == null || (typeof va === 'number' && isNaN(va)));
+    const bMissing = (vb == null || (typeof vb === 'number' && isNaN(vb)));
+    if (aMissing && bMissing) return 0;
+    if (aMissing) return 1;
+    if (bMissing) return -1;
+    if (va < vb) return -1 * dirMult;
+    if (va > vb) return  1 * dirMult;
+    return 0;
+  });
+}
+
+function setSortAndRender(table, key) {
+  const st = SORT_STATE[table];
+  if (st.key === key) {
+    st.dir = st.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    st.key = key;
+    st.dir = 'asc';
+  }
+  if (table === 'peer')   renderPeerTable();
+  if (table === 'issuer') renderIssuerBondsTable();
+}
+
+// Refresh all sortable header indicators (arrow direction + dimming).
+// Called from each render so the visual state always matches SORT_STATE.
+function updateSortIndicators() {
+  document.querySelectorAll('th.sortable').forEach(th => {
+    const tbl = th.dataset.table;
+    const key = th.dataset.key;
+    const ind = th.querySelector('.sort-ind');
+    if (!tbl || !ind) return;
+    const st = SORT_STATE[tbl];
+    if (st && st.key === key) {
+      ind.innerHTML = st.dir === 'asc' ? '&#9650;' : '&#9660;';
+      th.classList.add('sort-active');
+    } else {
+      ind.innerHTML = '&#9650;';
+      th.classList.remove('sort-active');
+    }
+  });
+}
+
 function renderPeerTable() {
   const spreadShock = parseInt(elSpread.value);
+  const st = SORT_STATE.peer;
+  const bonds = sortBondsBy(PEER_BONDS, st.key, st.dir);
   document.getElementById('peer-tbody').innerHTML =
-    PEER_BONDS.map(b => bondTableRowHTML(b, spreadShock)).join('');
+    bonds.map(b => bondTableRowHTML(b, spreadShock)).join('');
+  updateSortIndicators();
 }
 
 function renderIssuerBondsTable() {
@@ -2930,8 +3034,11 @@ function renderIssuerBondsTable() {
   titleEl.innerHTML = (currentIssuer || 'Issuer') +
     ` Own Bonds &mdash; ${ISSUER_BONDS.length} active issues, ` +
     `${minMty.toFixed(1)}y to ${maxMty.toFixed(1)}y remaining maturity`;
+  const st = SORT_STATE.issuer;
+  const bonds = sortBondsBy(ISSUER_BONDS, st.key, st.dir);
   document.getElementById('issuer-bonds-tbody').innerHTML =
-    ISSUER_BONDS.map(b => bondTableRowHTML(b, spreadShock)).join('');
+    bonds.map(b => bondTableRowHTML(b, spreadShock)).join('');
+  updateSortIndicators();
 }
 
 /* ── Notes & Flags ── */
