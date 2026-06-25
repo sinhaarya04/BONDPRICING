@@ -22,6 +22,26 @@ TENORS = (2, 5, 7, 10, 20, 30)
 TENOR_LABEL = {2: "2Y", 5: "5Y", 7: "7Y", 10: "10Y", 20: "20Y", 30: "30Y"}
 LAMBDA = 1.37  # Nelson-Siegel decay parameter (fixed; turns NS into a linear OLS)
 
+# Issuer-curve isolated-fit threshold.
+#
+# When the issuer has >= MIN_ISSUER_BONDS_FOR_ISOLATED_FIT outstanding bonds,
+# fit Nelson-Siegel on the issuer's OWN bonds only (peers become a display-
+# only sanity check on the chart, no regression input). This is the
+# Bloomberg NIA methodology: the issuer's existing curve is the dispositive
+# signal for where THIS issuer can fund; peers tell you about the sector
+# but they don't price the deal.
+#
+# Below the threshold, fall back to the combined peers+issuer regression
+# (curve shape discipline matters more than peer contamination when the
+# issuer's own curve is sparse).
+#
+# 8 is the BB-GPT-recommended floor for stable NS fits (3-parameter
+# regression — 3 unknowns, 8 observations gives 5 degrees of freedom and
+# enough tenor spread to constrain the level/slope/curvature factors).
+# Future refinement: replace the count with a goodness-of-fit gate (e.g.
+# require RMSE < 15 bps on issuer-only fit before triggering isolated mode).
+MIN_ISSUER_BONDS_FOR_ISOLATED_FIT = 8
+
 # S&P-equivalent rating scale: lower number = stronger credit.
 RATING_SCALE = {
     "AAA": 1,  "AA+": 2,  "AA": 3,  "AA-": 4,
@@ -228,21 +248,46 @@ def compute_pricing(payload, scenario):
     payload  = whatever build_payload() returns (issuer / treasuries / peers).
     scenario = dict from default_scenario().
 
-    Nelson-Siegel is fit to peers + the issuer's OWN outstanding bonds
-    (when available). The issuer's own long-dated paper anchors the long
-    end of the curve, preventing the NS extrapolation pathology where the
-    indicative 30Y can come out tighter than the issuer's existing 30Y
-    bonds. Credit adjustment is still computed from rating-vs-peer-avg
-    only — the curve fit handles the issuer-specific level, the credit
-    adj handles the rating differential.
+    Nelson-Siegel curve fit follows the Bloomberg NIA methodology
+    (validated 2026-06-25 against BB-GPT for the Disney miscoding case):
+
+    ISOLATED FIT MODE — when len(issuer_bonds) >= MIN_ISSUER_BONDS_FOR_
+    ISOLATED_FIT (default 8), fit NS on the issuer's OWN bonds only. The
+    rating signal is embedded in those prices, so credit_adj is zeroed
+    out per-tenor to avoid double-counting. Peers stay in the response
+    payload for the frontend to render as overlay-only (display sanity
+    check, not regression input).
+
+    COMBINED FIT MODE — when issuer has too few bonds for a stable
+    isolated fit, fall back to fitting on peers + issuer bonds together.
+    The credit adjustment (rating vs peer-average) re-engages because
+    the base curve now reflects a mixed-credit cohort.
+
+    NOTE: credit_adj has different meanings in the two paths:
+      - combined fit:  rating-notch adjustment vs peer-average rating
+                       (because base curve is peer-contaminated)
+      - isolated fit:  zero (rating is already in the issuer-only curve)
+    The return value `fit_mode` tells the frontend which path was used.
     """
     treasuries = payload["treasuries"]
     peers = payload["peers"]
     issuer_bonds = payload.get("issuerBonds") or []
     issuer_rating = payload["issuer"].get("rating", "NR")
 
-    # Anchor the curve with issuer's own bonds where available
-    fit_bonds = list(peers) + list(issuer_bonds)
+    # Branch on issuer bond count to pick the fit methodology
+    use_isolated_fit = (
+        len(issuer_bonds) >= MIN_ISSUER_BONDS_FOR_ISOLATED_FIT
+    )
+    if use_isolated_fit:
+        # Bloomberg NIA path: issuer's own curve drives the fit; peers
+        # are display-only on the frontend chart.
+        fit_bonds = list(issuer_bonds)
+        fit_mode = "isolated"
+    else:
+        # Sparse-issuer fallback: combine peers + issuer to maintain
+        # curve-shape stability when issuer has too few own bonds.
+        fit_bonds = list(peers) + list(issuer_bonds)
+        fit_mode = "combined"
     beta = fit_nelson_siegel(fit_bonds)
     base_peer = {t: max(0, round(ns_predict(t, beta))) for t in TENORS}
     # Floor at the issuer's observed secondary curve where the issuer has
@@ -256,7 +301,12 @@ def compute_pricing(payload, scenario):
         if obs is not None and obs > base_peer[t]:
             floor_applied[t] = (base_peer[t], round(obs))
             base_peer[t] = round(obs)
-    credit_adj = compute_credit_adj(issuer_rating, peers)
+    # Credit adjustment: zero in isolated fit (rating embedded in issuer
+    # curve); peer-vs-rating differential in combined fit.
+    if use_isolated_fit:
+        credit_adj = {t: 0 for t in TENORS}
+    else:
+        credit_adj = compute_credit_adj(issuer_rating, peers)
     # Data-driven NIC suggestion from curve-residual dispersion. Analyst
     # can still override via the scenario['nic'] slider; this is a
     # reference value the UI can surface.
@@ -297,6 +347,8 @@ def compute_pricing(payload, scenario):
         "nic_bump":       nic_bump,
         "nic_suggested":  nic_suggested,
         "floor_applied":  floor_applied,  # {tenor: (raw_ns, floored)} for UI
+        "fit_mode":       fit_mode,       # "isolated" (issuer-only) | "combined"
+        "fit_bond_count": len(fit_bonds), # for UI badge
         "rows":           rows,
     }
 

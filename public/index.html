@@ -1166,6 +1166,11 @@ let ISSUER_BONDS  = [];
 let EMPIRICAL_SCORECARD = null;
 const EMPIRICAL_MIN_N = 5;  // min bonds per bucket to trust the median
 let NS_BETA       = [0, 0, 0];
+// Issuer-curve isolated-fit threshold — see pricing.py for full rationale.
+// When issuer has >= this many own bonds, fit NS on issuer-only (Bloomberg
+// NIA methodology); peers become a display-only sanity check on the chart.
+const MIN_ISSUER_BONDS_FOR_ISOLATED_FIT = 8;
+let FIT_MODE      = 'combined';  // 'isolated' | 'combined' — set by computeBaseSpreads()
 let BASE_PEER_FLOORED = {};  // {tenor: {raw, floored}} when floor applied
 
 /* ── Issuer-observed curve interpolation (mirrors pricing.py) ──
@@ -1783,13 +1788,22 @@ async function runAnalysisWithSelectedPeers() {
       return;
     }
 
-    // Fit Nelson-Siegel to peer bonds + issuer's OWN outstanding bonds.
-    // Including the issuer's bonds anchors the long end of the curve: NS
-    // extrapolation beyond the peer maturity range is unreliable, and the
-    // issuer's existing 20Y/30Y paper tells you where this name actually
-    // trades. Without this anchor the indicative 30Y can come out tighter
-    // than the issuer's own outstanding curve, which is non-sensical.
-    const fitBonds = PEER_BONDS.concat(ISSUER_BONDS || []);
+    // Fit Nelson-Siegel — Bloomberg NIA methodology (validated 2026-06-25
+    // against BB-GPT for the Disney mispricing case). When the issuer has
+    // enough own bonds (>= MIN_ISSUER_BONDS_FOR_ISOLATED_FIT), fit on the
+    // issuer's curve ALONE — that's the dispositive signal for where THIS
+    // name funds. Peers become a display-only overlay on the chart. When
+    // the issuer's curve is sparse, fall back to the combined fit so
+    // shape stability holds.
+    const issuerN = (ISSUER_BONDS || []).length;
+    let fitBonds;
+    if (issuerN >= MIN_ISSUER_BONDS_FOR_ISOLATED_FIT) {
+      fitBonds = (ISSUER_BONDS || []).slice();
+      FIT_MODE = 'isolated';
+    } else {
+      fitBonds = PEER_BONDS.concat(ISSUER_BONDS || []);
+      FIT_MODE = 'combined';
+    }
     NS_BETA = fitNelsonSiegel(fitBonds);
 
     // Derive baseline spreads from NS prediction at each tenor, then
@@ -1809,8 +1823,17 @@ async function runAnalysisWithSelectedPeers() {
       }
     }
 
-    // Compute credit adjustment from rating differential
-    CREDIT_ADJ = computeCreditAdj(currentIssuerInfo.rating, PEER_BONDS);
+    // Compute credit adjustment. Zero in isolated-fit mode because the
+    // issuer-only curve already embeds the rating signal (adding a
+    // notch-based adjustment on top would double-count). Combined-fit
+    // mode keeps the rating-vs-peer-average bump because the base curve
+    // is peer-contaminated.
+    if (FIT_MODE === 'isolated') {
+      CREDIT_ADJ = {};
+      for (const t of TENORS) CREDIT_ADJ[t] = 0;
+    } else {
+      CREDIT_ADJ = computeCreditAdj(currentIssuerInfo.rating, PEER_BONDS);
+    }
 
     // Compute issuer adjustment from slider
     const premiumBps = parseInt(document.getElementById('issuer-premium').value);
@@ -2601,17 +2624,28 @@ function renderChart(pricing) {
   const colorMap = getTickerColorMap(peerTickers);
   const peerColors = peerTickers.map(t => colorMap[t] || '#1f5a9e');
 
-  // Peer bonds scatter — colored by issuer
+  // Peer bonds scatter. In isolated-fit mode peers don't drive the
+  // regression — render them as hollow open-circle markers so the user
+  // can see at a glance that they're reference-only context, not fit
+  // inputs. In combined mode peers ARE fit inputs → solid filled
+  // markers (same as before).
+  const isIsolated = (FIT_MODE === 'isolated');
+  const peerMarker = isIsolated
+    ? { color: 'rgba(0,0,0,0)', size: 10, opacity: 0.7,
+        line: { color: peerColors, width: 2 } }      // hollow rings
+    : { color: peerColors, size: 10, opacity: 0.85,
+        line: { color: '#0d4485', width: 1 } };      // filled disks
   const peerTrace = {
     x: PEER_BONDS.map(b => b.ytm),
     y: PEER_BONDS.map(b => b.spread + spreadShock),
     mode: 'markers',
     type: 'scatter',
-    name: 'Peer bonds',
-    marker: { color: peerColors, size: 10, opacity: 0.85, line: { color: '#0d4485', width: 1 } },
+    name: isIsolated ? 'Peer bonds (reference)' : 'Peer bonds',
+    marker: peerMarker,
     text: PEER_BONDS.map(b => {
       const cpn = (b.coupon != null) ? b.coupon.toFixed(3) + '%' : '?';
-      return `${b.ticker} (${b.rating})<br>${b.ytm}Y, ${b.spread + spreadShock} bps<br>Coupon: ${cpn}`;
+      const refTag = isIsolated ? '<br><i>(reference \u2014 not in fit)</i>' : '';
+      return `${b.ticker} (${b.rating})<br>${b.ytm}Y, ${b.spread + spreadShock} bps<br>Coupon: ${cpn}${refTag}`;
     }),
     hoverinfo: 'text',
   };
@@ -2627,7 +2661,9 @@ function renderChart(pricing) {
     x: xFit, y: yFit,
     mode: 'lines',
     type: 'scatter',
-    name: 'NSS fit (peers + issuer anchor)',
+    name: isIsolated
+      ? `NSS fit (issuer-only, n=${(ISSUER_BONDS || []).length})`
+      : `NSS fit (peers + issuer, n=${PEER_BONDS.length + (ISSUER_BONDS || []).length})`,
     line: { color: '#185FA5', width: 2.5 },
     hoverinfo: 'skip',
   };
