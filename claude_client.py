@@ -150,10 +150,64 @@ def call_claude_json(prompt, model=None, max_tokens=None, system=None):
         # Remove trailing fence
         if text.rstrip().endswith("```"):
             text = text.rstrip()[:-3].rstrip()
+    parsed = None
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as e:
-        return {"ok": False, "error": "bad_json",
-                "detail": f"{e}: {text[:200]}", "raw": res["text"]}
+        # Common Claude behavior: emits valid JSON followed by a trailing
+        # explanation paragraph despite a JSON-only instruction. The
+        # "Extra data" variant of JSONDecodeError carries e.pos = where
+        # the extra content starts, so text[:e.pos] is the parseable
+        # JSON. Retry once with that truncation.
+        if "Extra data" in str(e) and getattr(e, "pos", None):
+            try:
+                parsed = json.loads(text[:e.pos])
+            except json.JSONDecodeError:
+                pass
+        # Second fallback: pull the outermost {...} via brace-matching,
+        # ignoring braces inside strings. Catches cases where Claude
+        # wraps JSON in prose at BOTH ends ("Here is the JSON: {...}.
+        # Let me know if you need...").
+        if parsed is None:
+            extracted = _extract_first_json_object(text)
+            if extracted is not None:
+                try:
+                    parsed = json.loads(extracted)
+                except json.JSONDecodeError:
+                    pass
+        if parsed is None:
+            return {"ok": False, "error": "bad_json",
+                    "detail": f"{e}: {text[:200]}", "raw": res["text"]}
     return {"ok": True, "json": parsed, "raw": res["text"],
             "model": res["model"], "usage": res["usage"]}
+
+
+def _extract_first_json_object(text):
+    """Find the first balanced {...} substring. Returns None if not
+    found. Ignores braces inside double-quoted strings (the JSON
+    grammar's only string delimiter)."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i+1]
+    return None
