@@ -13,6 +13,7 @@ Requires a running Bloomberg Terminal authenticated on localhost:8194.
 import http.server
 import json
 import os
+import re
 import sys
 import urllib.request
 import urllib.error
@@ -609,7 +610,116 @@ def fetch_issuer_info(ticker):
     }
 
 
-def fetch_bonds_for_tickers(peer_tickers, max_bonds_per_issuer=15):
+# Claude Gate-2 disambiguator (insurance against token-filter false
+# positives). Token-only Gate-2 is conservative — it drops anything with
+# TRUST/TRST/FUND in LONG_COMP_NAME. For known data (Horseshoe vs TWDC
+# vs Pacificare) this catches the hybrids cleanly. But future issuers
+# might have legitimate parent-credit subsidiaries whose names happen to
+# contain those tokens (e.g. "Apple Capital Trust 2025" if guaranteed by
+# Apple Inc). Claude knows real-world subsidiary structures and can
+# adjudicate. We only call Claude AFTER token-only Gate-2 fires (so
+# common bonds incur zero LLM latency). Per-session in-memory cache by
+# (long_comp_name, parent_ticker) avoids repeated API calls.
+_GATE2_CLAUDE_CACHE = {}
+
+def claude_is_parent_credit(long_comp_name, parent_ticker, parent_name):
+    """Returns True iff Claude judges the bond's legal entity to be a
+    legitimate parent-credit subsidiary of parent_ticker (override the
+    token-filter drop). Returns False (confirm drop) on:
+      - Genuine hybrid/SPV (Horseshoe Funding Trust, etc.)
+      - Claude API unavailable / not configured / network error
+      - Ambiguous response
+    The conservative default (False = drop) ensures we don't accidentally
+    keep hybrids when Claude is down."""
+    long_comp_name = (long_comp_name or "").strip()
+    if not long_comp_name:
+        return False
+    key = (long_comp_name.upper(), (parent_ticker or "").upper())
+    if key in _GATE2_CLAUDE_CACHE:
+        return _GATE2_CLAUDE_CACHE[key]
+    try:
+        import claude_client
+        if not claude_client.is_configured():
+            _GATE2_CLAUDE_CACHE[key] = False
+            return False
+        system = (
+            "You are a fixed-income credit analyst. Decide whether a "
+            "Bloomberg-listed bond's legal issuer is a (1) parent-credit "
+            "subsidiary that shares its parent's senior unsecured rating "
+            "via guarantee or whole-company integration, or (2) a "
+            "trust/SPV/hybrid vehicle (statutory trust, capital trust, "
+            "preferred securities trust, funding trust) whose bonds carry "
+            "structural subordination to the parent. Reply ONLY with "
+            "valid JSON, no prose."
+        )
+        prompt = (
+            f"Bond legal issuer (Bloomberg LONG_COMP_NAME): {long_comp_name}\n"
+            f"Bloomberg TICKER on the bond: {parent_ticker}\n"
+            f"Parent issuer name: {parent_name or '(unknown)'}\n\n"
+            "Return JSON: {\"is_parent_credit\": bool, "
+            "\"confidence\": 0.0-1.0, \"rationale\": \"<=20 words\"}"
+        )
+        res = claude_client.call_claude_json(prompt, system=system,
+                                              max_tokens=200)
+        if not res.get("ok"):
+            _GATE2_CLAUDE_CACHE[key] = False
+            return False
+        j = res.get("json") or {}
+        is_parent = bool(j.get("is_parent_credit"))
+        conf = float(j.get("confidence") or 0.0)
+        # Require BOTH a positive verdict AND >= 0.7 confidence. Anything
+        # lower defaults to dropping the bond (token filter wins).
+        verdict = is_parent and conf >= 0.7
+        if verdict:
+            sys.stderr.write(
+                f"  Claude Gate-2 override: KEEP '{long_comp_name}' "
+                f"under {parent_ticker} ({j.get('rationale', '')})\n"
+            )
+        _GATE2_CLAUDE_CACHE[key] = verdict
+        return verdict
+    except Exception as e:
+        sys.stderr.write(
+            f"  Claude Gate-2 disambiguator error: {e}\n"
+        )
+        _GATE2_CLAUDE_CACHE[key] = False
+        return False
+
+
+# Gate-2 hybrid/SPV detector (BB-GPT round-5.6 final spec). Token-only
+# match on LONG_COMP_NAME — verified against live Bloomberg data:
+#   - OAS-G > 15 bps backstop dropped: OAS-G on Horseshoe Trust I/II is
+#     actually ~0 bps on live data (BB-GPT's round-2 figure of 37 bps was
+#     based on the non-existent G_SPRD_BID field). Field retired.
+#   - CREDIT_ENHANCE_GUARANTEED_IND override dropped: field returns None
+#     on both Horseshoe trusts AND on GE Capital / BRK Finance, so it
+#     can't discriminate.
+# Gate-1 (TICKER match) already filters bonds to those tagged under the
+# parent ticker, so legitimate parent-credit subsidiaries (TWDC, NBCUniversal,
+# Pacificare, GE Capital Funding, BRK Finance) all pass via no-token-match.
+# FUND must be matched as a whole word (\bFUND\b) so "FUNDING" doesn't
+# accidentally trigger.
+_GATE2_HYBRID_PHRASES = (
+    "STATUTORY TRUST", "CAPITAL TRUST",
+    "PREFERRED SECURITIES", "PREFERRED TRUST",
+    "TRUST", "TRST",
+)
+_GATE2_FUND_WORD = re.compile(r"\bFUND\b")
+
+def gate2_exclude(flds):
+    """Returns True iff the bond should be EXCLUDED on hybrid/SPV grounds.
+    Apply AFTER Gate-1 (TICKER match)."""
+    name = (flds.get("LONG_COMP_NAME") or "").upper()
+    if not name:
+        return False
+    if any(tok in name for tok in _GATE2_HYBRID_PHRASES):
+        return True
+    if _GATE2_FUND_WORD.search(name):
+        return True
+    return False
+
+
+def fetch_bonds_for_tickers(peer_tickers, max_bonds_per_issuer=15,
+                            parent_name_lookup=None):
     """Resolve a list of issuer tickers into a deduplicated list of USD
     bond rows ready for pricing / display.
 
@@ -647,12 +757,35 @@ def fetch_bonds_for_tickers(peer_tickers, max_bonds_per_issuer=15):
                 "ID_CUSIP", "ISSUE_DT", "MATURITY_YEARS_AT_ISSUE",
                 "YAS_ZSPREAD_BASIS_CONSTANT_MTY",
                 "BB_NEW_ISSUE_SPREAD_ANALYSIS",  # NIA-method NIC at issue
+                "CALLABLE",  # 'Y'/'N' — for excluding callables from floor pool
+                "MTY_TYP",   # secondary signal: 'CALLABLE'/'AT MATURITY'/'SINKABLE'/etc.
+                "NXT_CALL_DT",  # for make-whole vs true-callable classification
+                "PX_BID",       # for price-based floor-pool exclusion only
+                # G-spread re-added for wave-6 on-the-run anchor:
+                # callable on-the-runs have OAS != G-spread (e.g. AAPL
+                # 4 3/4 05/12/35 prints OAS+64 vs G+28). For anchoring a
+                # NEW AT-PAR BULLET, G-spread is the correct equivalent.
+                "BLOOMBERG_MID_G_SPREAD",
+                # Wave-7a: $500M liquidity floor on on-the-run anchor
+                # candidates. Eliminates illiquid legacy bonds (e.g.
+                # DIS 7.28% 2028 at $194M) from anchor pool — their
+                # G-spreads are distorted by infrequent trading.
+                "AMT_OUTSTANDING",
             ])
             for sec, flds in bond_data.items():
                 if sec in seen:
                     continue
                 seen.add(sec)
                 if (flds.get("CRNCY") or "").upper() != "USD":
+                    continue
+                # Gate-1: TICKER match (BB-GPT round-3 critical fix).
+                # OpenFIGI's "search by ticker" sometimes returns bonds
+                # from related entities priced on a different curve.
+                # Bloomberg's TICKER field is the authoritative tag —
+                # drop anything whose ticker doesn't match the issuer
+                # we requested.
+                bond_tk = (flds.get("TICKER") or "").strip().upper()
+                if bond_tk and bond_tk != ptk.upper():
                     continue
                 ytm = years_to_maturity_from_date(flds.get("MATURITY"))
                 if ytm is None:
@@ -663,6 +796,35 @@ def fetch_bonds_for_tickers(peer_tickers, max_bonds_per_issuer=15):
                     continue
                 if ytm < 0.5 or ytm > 35 or spread <= 0:
                     continue
+                # Gate-2: token-only hybrid/SPV detector (round-5.6 spec).
+                # Catches Horseshoe Funding Trust I/II via TRUST/TRST/FUND
+                # tokens. Keeps TWDC, NBCUniversal, Pacificare, BRK Finance,
+                # GE Capital Funding (none of these contain the trust tokens
+                # in LONG_COMP_NAME). Claude disambiguator fires AFTER the
+                # token check as insurance against false positives on future
+                # ambiguous names — only called when Gate-2 already wants
+                # to drop, so common bonds incur zero LLM latency.
+                if gate2_exclude(flds):
+                    long_comp = flds.get("LONG_COMP_NAME") or ""
+                    parent_name = (parent_name_lookup or {}).get(ptk.upper())
+                    if claude_is_parent_credit(long_comp, ptk, parent_name):
+                        # Claude rescued — don't drop. Keep going.
+                        pass
+                    else:
+                        sys.stderr.write(
+                            f"  Gate-2 trust-token drop: {bond_tk} "
+                            f"LONG_COMP_NAME='{long_comp}'\n"
+                        )
+                        continue
+                # Price < 85 filter removed from NSS fit per BB-GPT round 4
+                # — for AA+ issuers the long-dated low-coupon bonds (e.g.
+                # AAPL 2.55% 2060 at $54) carry valid credit signal via
+                # OAS even though their G-spreads look distorted on price.
+                # The filter is now applied ONLY for floor-pool selection
+                # in pricing.py (a discount bond shouldn't anchor a new
+                # par issue's floor, but it CAN inform the curve fit).
+                # We still store px_bid for the floor-pool filter to use.
+                px_bid = safe_float(flds.get("PX_BID"))
                 rating = (flds.get("RTG_SP")
                           or flds.get("RTG_SP_LT_LC_ISSUER_CREDIT")
                           or "NR")
@@ -694,6 +856,16 @@ def fetch_bonds_for_tickers(peer_tickers, max_bonds_per_issuer=15):
                     "coupon":      safe_float(flds.get("CPN")),
                     "cds_basis":   safe_float(flds.get("YAS_ZSPREAD_BASIS_CONSTANT_MTY")),
                     "nic_at_issue": safe_float(flds.get("BB_NEW_ISSUE_SPREAD_ANALYSIS")),
+                    # Callable detection: 'Y'/'N' on CALLABLE plus MTY_TYP
+                    # as secondary signal. Either path triggers exclusion
+                    # from the floor pool (BB-GPT round-2 rec).
+                    "callable":    (str(flds.get("CALLABLE") or "").upper() == "Y"),
+                    "maturity_type": (str(flds.get("MTY_TYP") or "").upper()),
+                    "nxt_call_dt": (str(flds.get("NXT_CALL_DT"))[:10]
+                                    if flds.get("NXT_CALL_DT") else ""),
+                    "px_bid":      safe_float(flds.get("PX_BID")),
+                    "g_spread":    safe_float(flds.get("BLOOMBERG_MID_G_SPREAD")),
+                    "amt_outstanding": safe_float(flds.get("AMT_OUTSTANDING")),
                     "z_score":     None,  # filled in below
                 })
         except Exception as e:
@@ -979,7 +1151,7 @@ def _attach_zscores(rows, ref_stats=None):
             r["z_score"] = round((r["spread"] - mean) / std, 2)
 
 
-def fetch_issuer_bonds(ticker):
+def fetch_issuer_bonds(ticker, parent_name=None):
     """Pull the issuer's own outstanding USD bonds. Same shape as
     fetch_bonds_for_tickers, just for a single issuer. Uses a much
     larger per-issuer cap (75) than the peer-enumeration default (15)
@@ -987,8 +1159,14 @@ def fetch_issuer_bonds(ticker):
     stack" — we want all of AAPL's ~50 outstanding USD bonds, not the
     first 15. 75 is below OpenFIGI's single-page limit (~100) so no
     pagination needed.
+
+    parent_name: optional Bloomberg LONG_COMP_NAME of the parent, passed
+    through to the Claude Gate-2 disambiguator so it can adjudicate
+    borderline names with the parent context.
     """
-    return fetch_bonds_for_tickers([ticker], max_bonds_per_issuer=75)
+    lookup = {ticker.upper(): parent_name} if parent_name else None
+    return fetch_bonds_for_tickers([ticker], max_bonds_per_issuer=75,
+                                   parent_name_lookup=lookup)
 
 
 def _build_empirical_scorecard(peer_rows, peer_tickers, issuer_info):
@@ -1086,10 +1264,10 @@ def build_payload(ticker, peers_override=None, bonds_override=None, issuer_info=
             _attach_zscores(all_peers)
         peer_tickers = sorted({b["ticker"] for b in all_peers})
         # Still fetch the issuer's own bonds (separate from curated peer list).
-        # Re-score issuer bonds against the PEER cohort so the Z column
-        # answers "is this issuer rich/cheap vs peers" not "vs its own bonds".
         try:
-            issuer_bonds = fetch_issuer_bonds(ticker)
+            issuer_bonds = fetch_issuer_bonds(
+                ticker, parent_name=issuer_info.get("name"),
+            )
             _attach_zscores(issuer_bonds, ref_stats=_cohort_stats_from(all_peers))
         except Exception as e:
             sys.stderr.write(f"  Warning: issuer-bond fetch failed for {ticker}: {e}\n")
@@ -1119,14 +1297,28 @@ def build_payload(ticker, peers_override=None, bonds_override=None, issuer_info=
                      f"Contact desk to add peers for this sector."
         }
 
-    all_peers = fetch_bonds_for_tickers(peer_tickers)
+    # Build parent-name lookup for Claude Gate-2 disambiguator. Only used
+    # when token-only Gate-2 wants to drop a bond — common bonds skip
+    # the LLM call entirely.
+    try:
+        peer_issuer_info = fetch_issuers_bulk(peer_tickers)
+        parent_name_lookup = {
+            tk.upper(): info.get("name")
+            for tk, info in peer_issuer_info.items() if info.get("name")
+        }
+    except Exception:
+        parent_name_lookup = None
+    all_peers = fetch_bonds_for_tickers(peer_tickers,
+                                        parent_name_lookup=parent_name_lookup)
 
     # Fetch the issuer's own bonds separately so the frontend can show
     # them as a distinct series + dedicated table. Re-score issuer bonds
     # against the PEER cohort so the Z column tells you "rich/cheap vs
     # peers" rather than "vs other bonds from the same issuer".
     try:
-        issuer_bonds = fetch_issuer_bonds(ticker)
+        issuer_bonds = fetch_issuer_bonds(
+            ticker, parent_name=issuer_info.get("name"),
+        )
         _attach_zscores(issuer_bonds, ref_stats=_cohort_stats_from(all_peers))
     except Exception as e:
         sys.stderr.write(f"  Warning: issuer-bond fetch failed for {ticker}: {e}\n")

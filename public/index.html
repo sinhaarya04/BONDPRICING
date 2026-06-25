@@ -773,25 +773,19 @@
         <span class="range-val" id="rate-shock-val">0</span>
       </div>
 
-      <label for="issuer-premium">Issuer Premium (bps)</label>
-      <div class="range-row">
-        <input type="range" id="issuer-premium" min="0" max="30" step="1" value="5" />
-        <span class="range-val" id="issuer-premium-val">5</span>
+      <!-- Issuer Premium: manual slider removed 2026-06-25. Adjusted only
+           by Tigress AI via chat-suggested scenarios (applyChatSuggestedScenario).
+           Hidden input keeps the value plumbing intact. -->
+      <input type="hidden" id="issuer-premium" value="0" />
+      <span id="issuer-premium-val" style="display:none;">0</span>
+      <div style="font-size:11px;color:#888;margin:6px 0 2px 0;line-height:1.4;">
+        <b>Issuer Premium:</b> <span id="issuer-premium-display">+0 bps</span>
+        <span style="color:#aaa;">&middot; set by Tigress AI when scenario calls for it</span>
       </div>
-      <div id="issuer-prem-suggested-box" style="display:none;font-size:11px;color:#555;margin-top:4px;padding:6px 8px;background:#fef9f3;border-left:3px solid #e8752a;border-radius:0 4px 4px 0;line-height:1.4;">
-        <div id="issuer-prem-suggested-summary"></div>
-        <div id="issuer-prem-suggested-breakdown" style="font-size:10px;color:#888;margin-top:2px;"></div>
-        <button id="issuer-prem-suggested-apply" style="margin-top:4px;padding:1px 8px;border:1px solid #e8752a;background:#fff;color:#e8752a;border-radius:3px;font-size:10px;font-weight:700;cursor:pointer;">Use</button>
-      </div>
-
       <label for="nic-adj">NIC Adjustment (bps)</label>
       <div class="range-row">
         <input type="range" id="nic-adj" min="0" max="20" step="1" value="5" />
         <span class="range-val" id="nic-adj-val">5</span>
-      </div>
-      <div id="nic-suggested-box" style="display:none;font-size:11px;color:#555;margin-top:4px;padding:6px 8px;background:#f0f4ff;border-left:3px solid #4a6cf7;border-radius:0 4px 4px 0;line-height:1.4;">
-        <span id="nic-suggested-text"></span>
-        <button id="nic-suggested-apply" style="margin-left:6px;padding:1px 8px;border:1px solid #4a6cf7;background:#fff;color:#4a6cf7;border-radius:3px;font-size:10px;font-weight:700;cursor:pointer;">Use</button>
       </div>
 
       <div class="preset-row">
@@ -1172,6 +1166,63 @@ let NS_BETA       = [0, 0, 0];
 const MIN_ISSUER_BONDS_FOR_ISOLATED_FIT = 8;
 let FIT_MODE      = 'combined';  // 'isolated' | 'combined' — set by computeBaseSpreads()
 let BASE_PEER_FLOORED = {};  // {tenor: {raw, floored}} when floor applied
+let LONG_END_CAPPED   = {};  // {tenor: {raw, capped}} when long-end cap applied
+let BONDS_DROPPED     = 0;   // number of bonds excluded by pre-fit filters
+
+// Pre-fit filter + extrapolation cap constants (BB-GPT 2026-06-25 refinement)
+const LONG_END_EXTRAP_BPS_PER_YEAR = 3.5;
+const LOW_COUPON_RATIO              = 0.5;   // coupon < 0.5 * 5Y UST = drop
+const ZSCORE_MAX_ITERATIONS         = 3;
+const ZSCORE_LONG_END_TENOR         = 20;    // tenors >20y get 3.0sigma floor
+
+// Tenor-scaled NIC offsets: slider sets the 10Y baseline, other tenors
+// apply this offset. Default slider 6 -> 1/3/5/6/8/10 bps across the curve.
+const NIC_TENOR_OFFSETS = {2: -5, 5: -3, 7: -1, 10: 0, 20: 2, 30: 4};
+
+function _sampleSizeThreshold(n) {
+  if (n >= 20) return 2.5;
+  if (n >=  8) return 3.0;
+  return null;
+}
+
+function dropLowCouponBonds(bonds, shortYieldPct) {
+  // Bonds with coupons far below current rates trade at deep discount;
+  // their G-spreads are warped. Drop them before fitting.
+  if (!bonds || !shortYieldPct) return (bonds || []).slice();
+  const threshold = LOW_COUPON_RATIO * shortYieldPct;
+  return bonds.filter(b => (b.coupon == null ? 999 : b.coupon) >= threshold);
+}
+
+function iterativeResidualOutlierRemoval(bonds) {
+  // Refit NS up to 3 times, dropping bonds whose residual / sigma
+  // exceeds the sample-size-adjusted threshold. Stops when converged
+  // or when survivors would fall below 5.
+  let current = (bonds || []).slice();
+  for (let iter = 0; iter < ZSCORE_MAX_ITERATIONS; iter++) {
+    const n = current.length;
+    const thresh = _sampleSizeThreshold(n);
+    if (thresh == null) return current;
+    const beta = fitNelsonSiegel(current);
+    const residuals = current.map(b => b.spread - nsPredict(b.ytm, beta));
+    const meanR = residuals.reduce((a, b) => a + b, 0) / n;
+    const varR  = residuals.reduce((a, r) => a + (r - meanR) ** 2, 0) / Math.max(n - 1, 1);
+    const stdR  = Math.sqrt(varR);
+    if (stdR === 0) return current;
+    const survivors = [];
+    for (let i = 0; i < n; i++) {
+      const b = current[i];
+      // Long bonds disperse more — floor at 3.0sigma even when global is 2.5
+      const localThresh = ((b.ytm || 0) > ZSCORE_LONG_END_TENOR)
+        ? Math.max(thresh, 3.0) : thresh;
+      const z = Math.abs((residuals[i] - meanR) / stdR);
+      if (z <= localThresh) survivors.push(b);
+    }
+    if (survivors.length === n) return current;  // converged
+    if (survivors.length < 5)  return current;   // would over-trim
+    current = survivors;
+  }
+  return current;
+}
 
 /* ── Issuer-observed curve interpolation (mirrors pricing.py) ──
    Linear interp between adjacent issuer bonds. Tenors just past either
@@ -1439,9 +1490,10 @@ function renderIssuerPremiumSuggestion() {
 }
 
 function renderStatisticalNic() {
+  const box = document.getElementById('nic-suggested-box');
+  if (!box) return;  // suggestion box removed per user request 2026-06-25
   const fitBonds = PEER_BONDS.concat(ISSUER_BONDS || []);
   const stat = computeStatisticalNic(fitBonds, NS_BETA);
-  const box = document.getElementById('nic-suggested-box');
   if (!stat) { box.style.display = 'none'; return; }
   const methodLabel = stat.method === 'BB_NEW_ISSUE_SPREAD_ANALYSIS'
     ? `Bloomberg NIC at issue, n=${stat.n}, median ${stat.raw} bps`
@@ -1796,25 +1848,67 @@ async function runAnalysisWithSelectedPeers() {
     // the issuer's curve is sparse, fall back to the combined fit so
     // shape stability holds.
     const issuerN = (ISSUER_BONDS || []).length;
-    let fitBonds;
+    let rawFitBonds;
     if (issuerN >= MIN_ISSUER_BONDS_FOR_ISOLATED_FIT) {
-      fitBonds = (ISSUER_BONDS || []).slice();
+      rawFitBonds = (ISSUER_BONDS || []).slice();
       FIT_MODE = 'isolated';
     } else {
-      fitBonds = PEER_BONDS.concat(ISSUER_BONDS || []);
+      rawFitBonds = PEER_BONDS.concat(ISSUER_BONDS || []);
       FIT_MODE = 'combined';
     }
+    // Pre-fit filters (BB-GPT 2026-06-25):
+    //   1. Drop low-coupon distorted bonds (coupon < 50% of 5Y UST).
+    //      Deep-discount bonds have G-spreads warped by the discount
+    //      pull-to-par effect; they pull short/mid curve up artificially.
+    //   2. Iterative residual outlier removal — drop bonds whose
+    //      |residual / sigma| exceeds a sample-size-adjusted threshold
+    //      (2.5sigma when n>=20, 3.0sigma when 8<=n<20; 3.0sigma floor
+    //      for tenor>20y where natural dispersion is wider). Iterate
+    //      up to 3 times since the first fit is itself biased by the
+    //      outliers we want to remove.
+    const shortYieldPct = parseFloat((data?.treasuries || {})['5'] || (data?.treasuries || {})['2'] || 0);
+    const afterCoupon = dropLowCouponBonds(rawFitBonds, shortYieldPct);
+    const fitBonds = iterativeResidualOutlierRemoval(afterCoupon);
+    BONDS_DROPPED = rawFitBonds.length - fitBonds.length;
     NS_BETA = fitNelsonSiegel(fitBonds);
 
     // Derive baseline spreads from NS prediction at each tenor, then
-    // FLOOR at issuer's observed secondary curve (linear interp between
-    // adjacent issuer bonds). The new issue can't price tighter than
-    // existing HUM bonds — buyers would just buy the outstanding paper.
+    // FLOOR at issuer's observed senior secondary curve (using FILTERED
+    // bonds — junior/hybrid outliers were dropped by the Z-residual
+    // filter, so the floor reflects where the senior curve trades, not
+    // the widest-trading bond of any seniority).
     BASE_PEER = {};
-    BASE_PEER_FLOORED = {};  // record which tenors got floored, for UI
+    BASE_PEER_FLOORED = {};
+    LONG_END_CAPPED = {};
+    // Longest filtered bond — anchor for long-end cap (BB-GPT rec #1)
+    let longestYtm = 0;
+    let longestSpread = 0;
+    if (fitBonds.length > 0) {
+      const lf = fitBonds.reduce((a, b) =>
+        ((a.ytm || 0) > (b.ytm || 0) ? a : b));
+      longestYtm    = lf.ytm    || 0;
+      longestSpread = lf.spread || 0;
+    }
+    // Senior-only pool for the floor: in isolated mode use fitBonds (already
+    // filtered); in combined mode keep issuer rows only.
+    const floorPool = (FIT_MODE === 'isolated')
+      ? fitBonds
+      : fitBonds.filter(b =>
+          (b.ticker || '').toUpperCase() === (currentIssuer || '').toUpperCase());
     for (const t of TENORS) {
-      const raw = Math.max(0, Math.round(nsPredict(t, NS_BETA)));
-      const obs = issuerSpreadAtTenor(t, ISSUER_BONDS);
+      let raw = Math.max(0, Math.round(nsPredict(t, NS_BETA)));
+      // Long-end extrapolation cap (BB-GPT rec #1): beyond longest
+      // surviving bond, cap at last_spread + 3.5*(t-last_ytm). Soft
+      // cap (min with NSS), so NSS still wins when it predicts tighter.
+      if (longestYtm > 0 && t > longestYtm) {
+        const cap = Math.round(longestSpread + 3.5 * (t - longestYtm));
+        if (cap < raw) {
+          LONG_END_CAPPED[t] = { raw, capped: cap };
+          raw = Math.max(0, cap);
+        }
+      }
+      // Floor at observed senior curve
+      const obs = issuerSpreadAtTenor(t, floorPool);
       if (obs !== null && obs > raw) {
         BASE_PEER[t] = Math.round(obs);
         BASE_PEER_FLOORED[t] = { raw, floored: Math.round(obs) };
@@ -2356,6 +2450,12 @@ Return strictly valid JSON, no prose outside the JSON:
 - If the user asks "what does X mean", fill explained_term.
 - Keep replies short. Non-financial reader. No fluff.
 - Numbers in current_state are live — refer to them. Don't make up values.
+- Issuer Premium (bps) is YOUR knob — there is no manual slider for it. The user
+  cannot move it. When a scenario implies issuer-specific credit movement
+  (downgrade, M&A news, rating watch, sector-leadership shift, idiosyncratic
+  event), include issuer_premium in suggested_values with a justified value
+  (range 0-30 for negative news; use 0 if the scenario is sector-wide rather
+  than issuer-specific). When in doubt, default to 0.
 </constraints>`;
 }
 
@@ -2534,11 +2634,14 @@ function computePricing() {
     const peer     = BASE_PEER[t] + spreadShock;
     const credit   = CREDIT_ADJ[t];
     const issuer   = ISSUER_ADJ[t];
-    const final_s  = peer + credit + issuer + nic;
+    // Tenor-scaled NIC (BB-GPT rec #3). Slider sets the 10Y baseline;
+    // other tenors apply NIC_TENOR_OFFSETS on top. Floor at 0.
+    const nicAtT   = Math.max(0, nic + (NIC_TENOR_OFFSETS[t] || 0));
+    const final_s  = peer + credit + issuer + nicAtT;
     const yld      = +(treasury + final_s / 100).toFixed(3);
     const ipt      = final_s + 12;
-    const guidance  = final_s + 5;
-    rows.push({ tenor: t, label: TENOR_LABELS[t], treasury, peer, credit, issuer, nic, final_s, yld, ipt, guidance });
+    const guidance = final_s + 5;
+    rows.push({ tenor: t, label: TENOR_LABELS[t], treasury, peer, credit, issuer, nic: nicAtT, final_s, yld, ipt, guidance });
   }
   return rows;
 }
@@ -2560,6 +2663,12 @@ function update() {
   elSpreadVal.textContent = fmtBps(parseInt(elSpread.value));
   elRateVal.textContent = fmtBps(parseInt(elRate.value));
   elPremiumVal.textContent = elPremium.value;
+  // Read-only display chip (slider was removed; only Tigress AI sets this)
+  const _premDisplayEl = document.getElementById('issuer-premium-display');
+  if (_premDisplayEl) {
+    const _v = parseInt(elPremium.value) || 0;
+    _premDisplayEl.textContent = (_v >= 0 ? '+' : '') + _v + ' bps';
+  }
   const { nic: effNic, bump: nicBump } = effectiveNic();
   elNicVal.textContent = nicBump > 0 ? elNic.value + ' (+' + nicBump + ')' : elNic.value;
 
@@ -2701,13 +2810,14 @@ function renderChart(pricing) {
     hoverinfo: 'text',
   };
 
-  // Issuer indicative pricing — orange diamonds
+  // Issuer indicative pricing — orange diamonds + connecting curve
   const issuerTrace = {
     x: pricing.map(r => r.tenor),
     y: pricing.map(r => r.final_s),
-    mode: 'markers',
+    mode: 'lines+markers',
     type: 'scatter',
     name: 'Issuer indicative',
+    line: { color: '#D85A30', width: 2.5, shape: 'spline', smoothing: 0.7 },
     marker: { color: '#D85A30', size: 12, symbol: 'diamond' },
     text: pricing.map(r => `${r.label}: T+${r.final_s} (${r.yld.toFixed(2)}%)`),
     hoverinfo: 'text',
@@ -3361,7 +3471,7 @@ async function generatePPTX() {
     s3.addText('(Chart could not be captured)', { x: 2, y: 3, w: 8, h: 1, fontSize: 14, color: GRAY, fontFace: 'Arial' });
   }
 
-  s3.addText('Gray: Peer bonds  |  Blue line: Nelson-Siegel fit  |  Orange diamonds: ' + issuer + ' indicative pricing', {
+  s3.addText('Gray: Peer bonds  |  Blue line: Nelson-Siegel fit  |  Orange line + diamonds: ' + issuer + ' indicative pricing curve', {
     x: 0.5, y: 6.1, w: 12, h: 0.4, fontSize: 10, color: GRAY, fontFace: 'Arial',
   });
   addFooter(s3);
