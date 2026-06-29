@@ -67,6 +67,19 @@ def ref_data(securities, fields):
     while True:
         ev = session.nextEvent(10000)
         for msg in ev:
+            # Response-level error (e.g. daily-capacity / auth / permission).
+            # Without this branch a quota-exhaustion looks identical to "no
+            # data returned" — we silently return {} and downstream callers
+            # treat it as empty universe. Raise loudly so the caller stops.
+            if msg.hasElement("responseError"):
+                er = msg.getElement("responseError")
+                code = er.getElementAsString("code") if er.hasElement("code") else "?"
+                cat  = er.getElementAsString("category") if er.hasElement("category") else "?"
+                sub  = er.getElementAsString("subcategory") if er.hasElement("subcategory") else ""
+                txt  = er.getElementAsString("message") if er.hasElement("message") else str(er)
+                raise RuntimeError(
+                    f"Bloomberg response error [{cat}/{sub} code={code}]: {txt}"
+                )
             if msg.hasElement("securityData"):
                 arr = msg.getElement("securityData")
                 for i in range(arr.numValues()):

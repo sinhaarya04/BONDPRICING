@@ -156,12 +156,74 @@
     .actions-row { display: flex; gap: 12px; align-items: center; margin-bottom: 20px; }
     .btn {
       border: none; border-radius: 6px; padding: 10px 20px;
-      font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08);
+      transition: background 0.15s, transform 0.08s ease-out, box-shadow 0.08s ease-out;
+      will-change: transform;
+    }
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 8px rgba(0,0,0,0.15), 0 2px 4px rgba(0,0,0,0.10);
+    }
+    .btn:active {
+      transform: translateY(1px) scale(0.98);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.18) inset;
+      transition-duration: 0.04s;
     }
     .btn-blue { background: #146ff8; color: #fff; }
     .btn-blue:hover { background: #0d4db5; }
+    .btn-blue:active { background: #0a3d8f; }
     .btn-orange { background: #e8752a; color: #fff; }
     .btn-orange:hover { background: #c9621a; }
+    .btn-orange:active { background: #a55014; }
+
+    /* ── Tactile press feel for ALL action buttons (inline + classed) ── */
+    .landing-btn,
+    .btn-run,
+    .chat-send,
+    .request-send,
+    .add-peer-btn,
+    .preset-btn,
+    .btn-press {
+      transition: background 0.15s, color 0.15s, border-color 0.15s,
+                  transform 0.08s ease-out, box-shadow 0.08s ease-out !important;
+      will-change: transform;
+    }
+    .landing-btn:hover,
+    .btn-run:hover,
+    .chat-send:hover,
+    .request-send:hover,
+    .add-peer-btn:hover,
+    .btn-press:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 10px rgba(0,0,0,0.15), 0 2px 4px rgba(0,0,0,0.08);
+    }
+    .landing-btn:active,
+    .btn-run:active,
+    .chat-send:active,
+    .request-send:active,
+    .add-peer-btn:active,
+    .preset-btn:active,
+    .btn-press:active {
+      transform: translateY(1px) scale(0.97) !important;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.20) inset !important;
+      transition-duration: 0.04s;
+      filter: brightness(0.92);
+    }
+
+    /* Ripple flash on click — runs once via :active activation */
+    @keyframes btn-press-flash {
+      0%   { box-shadow: 0 0 0 0 rgba(232,117,42,0.45); }
+      100% { box-shadow: 0 0 0 14px rgba(232,117,42,0); }
+    }
+    .btn-orange:active,
+    .btn-press.btn-orange:active { animation: btn-press-flash 0.45s ease-out; }
+    @keyframes btn-press-flash-blue {
+      0%   { box-shadow: 0 0 0 0 rgba(20,111,248,0.45); }
+      100% { box-shadow: 0 0 0 14px rgba(20,111,248,0); }
+    }
+    .btn-blue:active,
+    .preset-btn.active:active { animation: btn-press-flash-blue 0.45s ease-out; }
 
     /* ── Notes ── */
     .notes-card {
@@ -2126,7 +2188,7 @@ function renderAiPeerSuggestion(json) {
 
   bodyEl.innerHTML = `<div style="margin-bottom:10px;color:#1a1f36;">${json.summary || ''}</div>${chips}${addChips}` +
     `<div style="margin-top:10px;font-size:11px;color:#888;">Recommended max peers: ${json.max_recommended || '?'}</div>` +
-    `<button onclick="applyAiPeerDecisions(window.__lastAiSuggestion)" style="margin-top:10px;padding:6px 12px;background:#e8752a;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">Apply AI Recommendations</button>`;
+    `<button class="btn-press btn-orange" onclick="applyAiPeerDecisions(window.__lastAiSuggestion)" style="margin-top:10px;padding:6px 12px;border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">Apply AI Recommendations</button>`;
   window.__lastAiSuggestion = json;
 }
 
@@ -2477,7 +2539,7 @@ function renderChatMessage(msg) {
     actionDiv.innerHTML =
       `<b>Suggested scenario:</b> ${labelParts.join(' &middot; ')}<br>` +
       `<i>${s.rationale || ''}</i><br>` +
-      `<button onclick='applyChatSuggestedScenario(${JSON.stringify(s).replace(/'/g, "&apos;")})'>Apply Scenario</button>`;
+      `<button class="btn-press btn-orange" style="padding:6px 14px;border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;" onclick='applyChatSuggestedScenario(${JSON.stringify(s).replace(/'/g, "&apos;")})'>Apply Scenario</button>`;
     div.appendChild(actionDiv);
   }
   return div;
